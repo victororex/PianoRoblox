@@ -8,6 +8,8 @@ No outro PC, entre na sua conta GitHub e baixe **PianoRoblox-v2-win-x64.zip** na
 
 Para levar também músicas, playlists e configurações, siga [TRANSFERIR.md](TRANSFERIR.md).
 
+Os 38 MIDIs salvos pelo usuário estão na pasta [musicas pianoblox](musicas%20pianoblox/). Baixe o repositório por **Code → Download ZIP**, extraia e escolha os arquivos pelo botão **Importar MIDI** do aplicativo.
+
 Abra **artifacts/publish-v2/PianoRoblox.exe**. A publicação Windows x64 é autocontida e não exige instalar .NET no computador de destino. Pode distribuir apenas o executável. Não há instalador ou assinatura digital.
 
 1. Abra uma experiência Roblox com piano controlável por teclado, ative o piano e feche o chat do jogo.

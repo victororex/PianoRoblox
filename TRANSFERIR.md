@@ -11,7 +11,9 @@ Não é necessário instalar .NET, Visual Studio ou compilar os fontes. O arquiv
 
 ## Suas músicas e configurações
 
-Os dados pessoais ficam no computador e não foram enviados ao GitHub.
+Os 38 arquivos MIDI fornecidos estão salvos na pasta [musicas pianoblox](musicas%20pianoblox/) deste repositório privado. No outro PC, baixe o repositório pelo botão **Code → Download ZIP** (ou faça `git clone`), extraia os arquivos e use **Importar MIDI** no PianoRoblox para escolher as músicas dessa pasta.
+
+A biblioteca do aplicativo, suas playlists e configurações continuam na pasta local do Windows. Para levar também esses dados:
 
 1. Feche o PianoRoblox nos dois PCs.
 2. No PC atual, pressione Win+R e abra **%AppData%\PianoRoblox**.
