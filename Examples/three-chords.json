@@ -1,0 +1,10 @@
+{
+  "title": "Teste de três acordes",
+  "bpm": 60,
+  "durationMs": 2500,
+  "events": [
+    { "timeMs": 0, "keys": ["t", "u", "o"] },
+    { "timeMs": 1000, "keys": ["y", "i", "p"] },
+    { "timeMs": 2000, "keys": ["u", "o", "a"] }
+  ]
+}

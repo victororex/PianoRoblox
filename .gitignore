@@ -1,0 +1,10 @@
+**/bin/
+**/obj/
+artifacts/
+.vs/
+*.user
+TestResults/
+*_wpftmp.csproj
+
+# Original source archives are kept locally; release packages are attached separately.
+/*.zip
