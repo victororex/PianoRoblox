@@ -108,7 +108,7 @@ public sealed class UiSmokeTests
                 Pump(Task.Delay(240)); Assert.Equal(count, keyboard.Notes.Length);
                 Assert.Equal(songs[0].Id, vm.Library.Queue.Current!.SongId);
                 Stage("Stop invalidates pending MIDI load and settings restore");
-                var midiSong = new Song { Title = "Complexo", Kind = "MIDI", FileName = "complex.mid", Speed = 110, Transpose = 12,
+                var midiSong = new Song { Title = "Treachery - Bleach", Kind = "MIDI", FileName = Guid.NewGuid() + ".mid", Speed = 110, Transpose = 12,
                     Optimization = new() { Preset = OptimizationPreset.Original }, SelectedTracks = [1], PerformanceMode = PlaybackPerformanceMode.FpsFriendly };
                 File.Copy(midiPath, library.GetSongPath(midiSong)); vm.Songs.Add(midiSong);
                 vm.Library.SelectedPlaylist = null; vm.Library.SelectedSong = midiSong;
@@ -118,10 +118,57 @@ public sealed class UiSmokeTests
                 Assert.Equal(PlaybackPerformanceMode.FpsFriendly, vm.Settings.PerformanceMode);
                 Assert.Equal(new[] { 1 }, vm.MidiImport.SelectedTrackIndexes);
                 Assert.Equal(OptimizationPreset.Original, vm.MidiImport.Preset);
+                Assert.Equal(midiSong.Title, vm.Title); Assert.Equal(midiSong.Title, vm.MidiImport.Data!.Title);
+                Assert.DoesNotContain(Path.GetFileNameWithoutExtension(midiSong.FileName), vm.MidiImport.MetadataSummary);
+                vm.Title = "Treachery - Bleach (renomeada)";
                 vm.MidiImport.Preset = OptimizationPreset.Balanced; Pump(vm.MidiImport.EnsureReadyAsync());
                 vm.UpdateSongCommand.Execute(null); Pump(Until(() => vm.UpdateSongCommand.CanExecute(null)));
                 var savedMidi = new SongLibraryService(directory).LoadAsync(); Pump(savedMidi);
                 Assert.Equal(OptimizationPreset.Balanced, savedMidi.Result.Single(song => song.Id == midiSong.Id).Optimization.Preset);
+                Assert.Equal(vm.Title, vm.MidiImport.Sequence!.Title);
+                Assert.Equal(vm.Title, savedMidi.Result.Single(song => song.Id == midiSong.Id).Title);
+                vm.SelectedTab = 6;
+                view.Measure(new Size(1100, 800)); view.Arrange(new Rect(0, 0, 1100, 800)); view.UpdateLayout();
+                Dispatcher.CurrentDispatcher.Invoke(() => { }, DispatcherPriority.ContextIdle);
+                foreach (var scroll in Descendants<System.Windows.Controls.ScrollViewer>(view)) scroll.ScrollToTop();
+                Dispatcher.CurrentDispatcher.Invoke(() => { }, DispatcherPriority.ContextIdle); view.UpdateLayout();
+                var titleBitmap = new RenderTargetBitmap(1100, 800, 96, 96, PixelFormats.Pbgra32);
+                var titleBackground = new DrawingVisual();
+                using (var drawing = titleBackground.RenderOpen()) drawing.DrawRectangle((Brush)app.FindResource("BackgroundBrush"), null, new Rect(0, 0, 1100, 800));
+                titleBitmap.Render(titleBackground); titleBitmap.Render(view);
+                var titleEncoder = new PngBitmapEncoder(); titleEncoder.Frames.Add(BitmapFrame.Create(titleBitmap));
+                using (var titleStream = File.Create(Path.Combine(output, "v3-library-title.png"))) titleEncoder.Save(titleStream);
+
+                Stage("V3 play all without song selection A -> B -> C");
+                var shortSongs = new[] { new Song { Title = "A", Kind = "JSON", FileName = "a-v3.json" },
+                    new Song { Title = "B", Kind = "JSON", FileName = "b-v3.json" }, new Song { Title = "C", Kind = "JSON", FileName = "c-v3.json" } };
+                for (int i = 0; i < shortSongs.Length; i++)
+                {
+                    Pump(json.ExportAsync(library.GetSongPath(shortSongs[i]), new(shortSongs[i].Title, 120, 120, [new(0, [60 + i * 2])])));
+                    vm.Songs.Add(shortSongs[i]);
+                }
+                var allPlaylist = new Playlist { Name = "Bleach V3", SongIds = shortSongs.Select(s => s.Id).ToList() };
+                vm.Library.Playlists.Add(allPlaylist); vm.Library.SelectedPlaylist = allPlaylist; vm.Library.SelectedSong = null;
+                int firstNew = keyboard.Notes.Length;
+                vm.Library.PlayAllPlaylistCommand.Execute(null);
+                Pump(Until(() => keyboard.Notes.Length >= firstNew + 3)); Pump(Task.Delay(180));
+                Assert.Equal(new[] { 60, 62, 64 }, keyboard.Notes.Skip(firstNew));
+                Assert.Equal("3 de 3", vm.Library.TrackLabel); Assert.Equal("Bleach V3", vm.Library.PlaybackCollectionName);
+                Assert.Empty(vm.Library.Upcoming);
+
+                Stage("V3 Next during sustain releases before B; Stop suppresses automatic advance");
+                var sustained = new Song { Title = "Sustain A", Kind = "JSON", FileName = "sustain-a.json", NoteDuration = new() { Mode = NoteDurationMode.MidiSustain } };
+                Pump(json.ExportAsync(library.GetSongPath(sustained), new("Sustain A", 120, 5000, [SustainV3Tests.Note(0, 61, 5000)])));
+                vm.Songs.Add(sustained);
+                vm.Library.SelectedPlaylist = new() { Name = "Sustain", SongIds = [sustained.Id, shortSongs[1].Id] };
+                Pump(vm.Library.PlayAllAsync()); Pump(Until(() => keyboard.HeldCount > 0));
+                int releasedBeforeNext = keyboard.Releases;
+                vm.NextCommand.Execute(null); Pump(Until(() => vm.NextCommand.CanExecute(null)));
+                Assert.Equal(shortSongs[1].Id, vm.Library.Queue.Current!.SongId);
+                Assert.True(keyboard.Releases > releasedBeforeNext); Assert.Equal(0, keyboard.HeldCount);
+                Pump(vm.Library.PlayAllAsync()); Pump(Until(() => keyboard.HeldCount > 0));
+                Pump(vm.StopAsync()); int stoppedCount = keyboard.Notes.Length; Pump(Task.Delay(180));
+                Assert.Equal(stoppedCount, keyboard.Notes.Length); Assert.Equal(0, keyboard.HeldCount);
                 Assert.Empty(failures);
                 Pump(vm.ShutdownAsync());
                 listener.Flush(); PresentationTraceSources.DataBindingSource.Listeners.Remove(listener);
@@ -158,11 +205,21 @@ public sealed class UiSmokeTests
         var watch = Stopwatch.StartNew();
         while (!condition()) { if (watch.Elapsed > TimeSpan.FromSeconds(10)) throw new TimeoutException("UI integration condition did not complete."); await Task.Delay(10); }
     }
-    private sealed class FakePlayer : IKeyboardPlayer
+    private sealed class FakePlayer : INoteKeyboardPlayer
     {
         private int concurrent;
         public int MaxConcurrent, Releases;
         private readonly System.Collections.Concurrent.ConcurrentQueue<int> notes = new();
+        private readonly System.Collections.Concurrent.ConcurrentDictionary<long, int> held = new();
+        private long ons, offs;
+        public int HeldCount => held.Count;
+        public PianoNote? ResolveNote(int midi) => new PianoMappingService().FromMidi(midi);
+        public NoteInputStatistics InputStatistics => new(ons, offs, 0, HeldCount);
+        public void ResetStatistics() { ons = offs = 0; }
+        public void NoteOn(IReadOnlyList<NoteAttack> attacks, PlaybackOptions options, CancellationToken token)
+        { foreach (var attack in attacks) { token.ThrowIfCancellationRequested(); held[attack.Id] = attack.Note.MidiNote; notes.Enqueue(attack.Note.MidiNote); ons++; } }
+        public void NoteOff(IReadOnlyList<long> ids, PlaybackOptions options)
+        { foreach (long id in ids) if (held.TryRemove(id, out _)) offs++; }
         public int[] Notes => notes.ToArray();
         public async Task PlayChord(IReadOnlyList<int> chord, PlaybackOptions options, CancellationToken token)
         {
@@ -170,7 +227,7 @@ public sealed class UiSmokeTests
             try { foreach (int note in chord) notes.Enqueue(note); await Task.Delay(2, token); }
             finally { Interlocked.Decrement(ref concurrent); }
         }
-        public void ReleaseAllKeys() => Interlocked.Increment(ref Releases);
+        public void ReleaseAllKeys() { Interlocked.Increment(ref Releases); offs += held.Count; held.Clear(); }
     }
 }
 

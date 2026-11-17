@@ -11,7 +11,8 @@ public sealed class MidiComplexityAnalyzer
         var times = notes.Select(n => n.TimeMs).ToArray();
         return new(notes.Length, groups.Length, notes.Select(n => n.TrackIndex).Distinct().Count(), notes.Count(n => n.IsPercussion),
             groups.Length == 0 ? 0 : groups.Max(g => g.Count()), Peak(times, 250), Peak(times, 1000),
-            Peak(groups.Select(g => g.Key).ToArray(), 1000), durationMs > 0 ? notes.Length * 1000d / durationMs : 0);
+            Peak(groups.Select(g => g.Key).ToArray(), 1000), durationMs > 0 ? notes.Length * 1000d / durationMs : 0)
+        { PeakTransitionsPerSecond = Peak(notes.SelectMany(n => new[] { n.TimeMs, n.TimeMs + (n.DurationMs > 0 ? n.DurationMs : 8) }).Order().ToArray(), 1000) };
     }
 
     public static OptimizationPreset Recommend(MidiAnalysis analysis) => analysis.MaxChordNotes <= 4 && analysis.PeakNotesPerSecond <= 25

@@ -54,7 +54,16 @@ public sealed class MainViewModel : ObservableObject
     public int[] TransposeOptions { get; } = [-24, -12, 0, 12, 24];
     public int[] CountdownOptions { get; } = [0, 1, 2, 3, 5, 10];
     private string title = "Escolha sua próxima música", artist = "", origin = "", sheetText = "[6rtu]--[rtu]--[etu]--[etu]";
-    public string Title { get => title; set => Set(ref title, value); }
+    public string Title
+    {
+        get => title;
+        set
+        {
+            if (!Set(ref title, value)) return;
+            if (source != null) source = source with { Title = value };
+            if (!loadingMidi) MidiImport.SetDisplayTitle(value);
+        }
+    }
     public string Artist { get => artist; set => Set(ref artist, value); }
     public string Origin { get => origin; set => Set(ref origin, value); }
     public string SheetText { get => sheetText; set => Set(ref sheetText, value); }
@@ -63,6 +72,18 @@ public sealed class MainViewModel : ObservableObject
     public string Statistics { get => statistics; private set => Set(ref statistics, value); }
     public string SheetStatistics { get => sheetStatistics; private set => Set(ref sheetStatistics, value); }
     public string RangeStatus { get => rangeStatus; private set => Set(ref rangeStatus, value); }
+    public string CompatibilitySummary { get; private set; } = "Importe uma música para analisar a cobertura.";
+    public string TransposeRecommendation { get; private set; } = "";
+    public string DiagnosticsSummary { get; private set; } = "";
+    private PianoCompatibility? compatibility;
+    public Array DurationModes { get; } = Enum.GetValues<NoteDurationMode>();
+    public Array ShiftStrategies { get; } = Enum.GetValues<ShiftStrategy>();
+    public string DurationLabel => (playback.State is PlaybackState.Playing or PlaybackState.Paused or PlaybackState.Countdown
+        ? playback.ActiveDurationMode : Settings.NoteDuration.SustainEnabled ? Settings.NoteDuration.Mode : NoteDurationMode.LegacyTap) switch
+    { NoteDurationMode.MidiSustain => "MIDI Sustain", NoteDurationMode.Hybrid => "Hybrid / Auto", _ => "Legacy Tap" };
+    public string DurationSource => source?.HasExactDurations == true ? "Durações MIDI/JSON explícitas. Notas sem Note Off usam hold estimado."
+        : "Esta sequência não contém Note Off. A duração das teclas será estimada.";
+    public string LibraryFolder => library.SongsFolder;
     private double speed = 100, sheetBpm = 120, spaceBeats = .25, dashBeats = .5, positionMs, durationMs, seekMs;
     public double Speed { get => speed; set { if (double.IsFinite(value) && Set(ref speed, Math.Clamp(value, 50, 150))) { playback.Speed = speed; Raise(nameof(RealDuration)); } } }
     public double SheetBpm { get => sheetBpm; set => Set(ref sheetBpm, value); }
@@ -79,10 +100,11 @@ public sealed class MainViewModel : ObservableObject
     private int transpose, selectedTab;
     public int Transpose { get => transpose; set { if (Set(ref transpose, Math.Clamp(value, -24, 24))) UpdateRange(); } }
     public int SelectedTab { get => selectedTab; set => Set(ref selectedTab, value); }
-    public string PlayerState => playback.State switch
+    public string PlayerState => switching ? "CARREGANDO MÚSICA" : playback.State switch
     {
-        PlaybackState.Countdown => "CONTAGEM", PlaybackState.Playing => "TOCANDO", PlaybackState.Paused => "PAUSADO",
-        PlaybackState.Completed => "CONCLUÍDO", _ => "PRONTO"
+        PlaybackState.Countdown => "CONTAGEM", PlaybackState.Playing => "TOCANDO",
+        PlaybackState.Paused => playback.PauseReason == PlaybackPauseReason.FocusLost ? "PAUSADO • SEM FOCO" : "PAUSADO • USUÁRIO",
+        PlaybackState.Completed => "CONCLUÍDO", PlaybackState.Error => "ERRO", _ => "PRONTO"
     };
     public ICommand ImportMidiCommand { get; }
     public ICommand ImportJsonCommand { get; }
@@ -107,12 +129,16 @@ public sealed class MainViewModel : ObservableObject
     public ICommand PreviousCommand { get; }
     public ICommand PlayPauseCommand { get; }
     public ICommand UpdateSongCommand { get; }
+    public ICommand ApplyTransposeRecommendationCommand { get; }
+    public ICommand OpenLibraryFolderCommand { get; }
+    public ICommand SustainTestCommand { get; }
 
     public MainViewModel(SongLibraryService? songLibrary = null, IKeyboardPlayer? keyboardPlayer = null, Func<bool>? isFocused = null,
         Action<Exception>? errorReporter = null)
     {
         this.errorReporter = errorReporter;
         parser = new(Mapping); json = new(Mapping); library = songLibrary ?? new();
+        library.Warning += message => { Status = message; Log(message); };
         timeline = new(Mapping);
         MidiImport = new(HandleError);
         Library = new(library, Songs, song => SwitchSongAsync(song, false, false),
@@ -152,6 +178,19 @@ public sealed class MainViewModel : ObservableObject
             else await PlayAsync();
         });
         UpdateSongCommand = Command(UpdateSongAsync);
+        ApplyTransposeRecommendationCommand = Command(() =>
+        { if (compatibility != null) { Transpose = compatibility.SuggestedTranspose; Log("Transposição recomendada aplicada por solicitação do usuário."); } return Task.CompletedTask; });
+        OpenLibraryFolderCommand = Command(() =>
+        { System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(library.SongsFolder) { UseShellExecute = true }); return Task.CompletedTask; });
+        SustainTestCommand = Command(async () =>
+        {
+            await StopAsync(); ClearMidiContext(); sourcePath = null; sourceKind = "JSON";
+            Settings.NoteDuration = new() { Mode = NoteDurationMode.MidiSustain }; Raise(nameof(Settings));
+            SetSequence(new("Teste de sustain: C4 1,5 s + E4 0,5 s", 120, 2500,
+                [new(0, [60]) { NoteDetails = [new(60, 1500)] }, new(500, [64]) { NoteDetails = [new(64, 500)] },
+                 new(1800, [60]) { NoteDetails = [new(60, 300)] }, new(2200, [61]) { NoteDetails = [new(61, 200)] }]));
+            SelectedTab = 0; await PlayAsync();
+        });
         ScaleCommand = Command(() => TestAsync([60, 62, 64, 65, 67, 69, 71, 72], false));
         ChordCommand = Command(() => TestAsync([60, 64, 67], true));
         DemoCommand = Command(async () =>
@@ -165,15 +204,31 @@ public sealed class MainViewModel : ObservableObject
             PositionMs = Math.Min(DurationMs, playback.PositionMs);
             if (visualBuffer.TryTake(out int index, out var musicEvent) && musicEvent != null)
             {
-                currentIndex = index; ActiveNotes = musicEvent.Notes.ToHashSet();
+                currentIndex = index; if (!playback.UsesSustain) ActiveNotes = musicEvent.Notes.ToHashSet();
                 highlightUntil = Environment.TickCount64 + 120; RefreshTimeline(index);
                 if (Settings.DetailedLog) Log($"Evento visual {index + 1}: {string.Join(' ', musicEvent.Notes.Select(PianoMappingService.Name))}");
             }
-            if (ActiveNotes.Count > 0 && (Environment.TickCount64 > highlightUntil || playback.State is not PlaybackState.Playing)) ActiveNotes = [];
+            if (playback.UsesSustain)
+            {
+                var held = playback.ActiveMidiNotes;
+                if (!ActiveNotes.SetEquals(held)) ActiveNotes = held.ToHashSet();
+            }
+            else if (ActiveNotes.Count > 0 && (Environment.TickCount64 > highlightUntil || playback.State is not PlaybackState.Playing)) ActiveNotes = [];
             if (lastVisualState != playback.State) { lastVisualState = playback.State; Raise(nameof(PlayerState)); }
+            if (Environment.TickCount64 - lastDiagnosticsUpdate >= 500)
+            {
+                lastDiagnosticsUpdate = Environment.TickCount64; Raise(nameof(DurationLabel));
+                if (Settings.PlaybackDiagnostics)
+                {
+                    var d = playback.Diagnostics;
+                    DiagnosticsSummary = $"Notas: {d.ExecutedNotes} • Down: {d.NoteOns} • Up: {d.NoteOffs} • Puladas: {d.SkippedNotes}\nAtrasados: {d.LateEvents} • Maior atraso: {d.MaximumDelayMs:0.0} ms • Teclas ativas: {d.HeldKeys} • Conflitos físicos: {d.PhysicalConflicts}";
+                    Raise(nameof(DiagnosticsSummary));
+                }
+            }
         };
         timer.Start();
     }
+    private long lastDiagnosticsUpdate;
 
     public async Task InitializeAsync()
     {
@@ -210,6 +265,7 @@ public sealed class MainViewModel : ObservableObject
         try { await MidiImport.LoadAsync(dialog.FileName); }
         finally { loadingMidi = false; }
         sourcePath = dialog.FileName; sourceKind = "MIDI"; SetSequence(MidiImport.Sequence!);
+        Settings.NoteDuration = new() { Mode = NoteDurationMode.Hybrid }; Raise(nameof(Settings)); Raise(nameof(DurationLabel));
         Origin = Path.GetFileName(dialog.FileName); Artist = ""; SelectedTab = 6;
         Log($"MIDI carregado: {dialog.FileName}");
     }
@@ -242,12 +298,23 @@ public sealed class MainViewModel : ObservableObject
         Statistics = $"{sourceKind} • BPM inicial {sequence.InitialBpm:0.##} • {sequence.NoteCount} notas • {sequence.ChordCount} acordes\n" +
             $"Menor: {(sequence.LowestNote is { } low ? PianoMappingService.Name(low) : "—")} • Maior: {(sequence.HighestNote is { } high ? PianoMappingService.Name(high) : "—")} • Fora de C2–C7: {sequence.OutOfRangeCount}";
         UpdateRange(); RefreshTimeline(0); Status = "Música carregada. Pronta para tocar.";
+        Raise(nameof(DurationSource));
     }
     private void UpdateRange()
     {
         if (source == null) return;
-        var count = source.Events.Sum(e => e.Notes.Count(n => n + Transpose is < 36 or > 96));
+        var count = source.Events.Sum(e => e.Notes.Count(n => n + Transpose < Mapping.Profile.FirstMidiNote || n + Transpose > Mapping.Profile.LastMidiNote));
         RangeStatus = count > 0 ? $"{count} notas ficam fora de C2–C7 após transposição ({Transpose:+0;-0;0})." : "Todas as notas estão no alcance C2–C7.";
+        IEnumerable<int> pitches = source.Events.SelectMany(e => e.Notes);
+        if (sourceKind == "MIDI" && MidiImport.Data is { } data)
+        {
+            var selected = MidiImport.SelectedTrackIndexes.ToHashSet();
+            pitches = data.Notes.Where(n => selected.Contains(n.TrackIndex) && (!MidiImport.RemovePercussion || !n.IsPercussion)).Select(n => n.MidiNote);
+        }
+        compatibility = PianoCompatibilityAnalyzer.Analyze(pitches, Transpose, Mapping.Profile);
+        CompatibilitySummary = $"Total: {compatibility.Total} • Dentro: {compatibility.Inside} • Fora: {compatibility.Outside} • Compatibilidade: {compatibility.Percent:0.0}%\nAbaixo: {compatibility.Below} • Dentro: {compatibility.Inside} • Acima: {compatibility.Above}";
+        TransposeRecommendation = $"Sugestão: {compatibility.SuggestedTranspose:+0;-0;0} semitons → {compatibility.SuggestedInside} notas no alcance ({compatibility.SuggestedPercent:0.0}%). Aplicação manual.";
+        Raise(nameof(CompatibilitySummary)); Raise(nameof(TransposeRecommendation));
     }
     private MusicSequence Prepare()
     {
@@ -263,11 +330,12 @@ public sealed class MainViewModel : ObservableObject
         var result = SequenceTransformer.Apply(source with { Title = Title }, Transpose, policy, Mapping.Profile);
         if (result.Ignored > 0) Log($"{result.Ignored} notas foram ignoradas porque estão fora do alcance do piano.");
         if (result.Folded > 0) Log($"{result.Folded} notas foram transpostas por oitava.");
+        if (result.Collisions > 0) Log($"{result.Collisions} notas dobradas no mesmo pitch após transposição; preservado o maior término de cada grupo.");
         if (result.Sequence.Events.Count == 0) throw new InvalidOperationException("Nenhuma nota tocável após a conversão.");
         return result.Sequence;
     }
     private PlaybackOptions Options() => new(Settings.ChordSpreadMs, Settings.KeyHoldMs, Settings.ChordMode, Settings.InputMode, Settings.RequireRobloxFocus,
-        Settings.PerformanceMode);
+        Settings.PerformanceMode, ShiftStrategy: Settings.ShiftStrategy, NoteDuration: Settings.NoteDuration.Validated());
     private async Task PlayAsync(double? start = null, int? countdown = null, bool fromSwitch = false)
     {
         if (preparing || loadingMidi || (switching && !fromSwitch)) return;
@@ -375,12 +443,13 @@ public sealed class MainViewModel : ObservableObject
         {
             if (ticket != playbackGeneration) return;
             switching = true;
+            Raise(nameof(PlayerState)); Status = "Carregando próxima música…";
             await playback.StopAsync(); visualBuffer.Clear(); ActiveNotes = [];
             await LoadSongDataAsync(song);
             if (ticket != playbackGeneration) return;
             if (play) await PlayAsync(0, betweenSongs ? Settings.CountdownBetweenSongs : Settings.CountdownSeconds, true);
         }
-        finally { switching = false; songSwitchGate.Release(); }
+        finally { switching = false; Raise(nameof(PlayerState)); songSwitchGate.Release(); }
     }
     private async Task ObservePlaybackAsync(Task task, long generation)
     {
@@ -398,6 +467,8 @@ public sealed class MainViewModel : ObservableObject
         song.Title = Title; song.Artist = Artist; song.Origin = Origin;
         song.Transpose = Transpose; song.Speed = Speed; song.ChordSpread = Settings.ChordSpreadMs;
         song.PerformanceMode = Settings.PerformanceMode; song.PianoProfileId = Mapping.Profile.Id;
+        song.NoteDuration = Settings.NoteDuration.Validated(); song.RangePolicy = Settings.RangePolicy;
+        song.ShiftStrategy = Settings.ShiftStrategy; song.ChordMode = Settings.ChordMode;
         if (sourceKind == "MIDI") { song.Optimization = MidiImport.CaptureSettings(); song.SelectedTracks = MidiImport.SelectedTrackIndexes; }
     }
     private async Task UpdateSongAsync()
@@ -418,7 +489,7 @@ public sealed class MainViewModel : ObservableObject
         if (song.Kind == "MIDI")
         {
             loadingMidi = true;
-            try { await MidiImport.LoadAsync(path, song.Optimization, song.SelectedTracks); }
+            try { await MidiImport.LoadAsync(path, song.Optimization, song.SelectedTracks, song.Title); }
             finally { loadingMidi = false; }
             sequence = MidiImport.Sequence!;
         }
@@ -434,6 +505,9 @@ public sealed class MainViewModel : ObservableObject
         sourcePath = path; sourceKind = song.Kind; SetSequence(sequence with { Title = song.Title });
         Artist = song.Artist; Origin = song.Origin; Transpose = song.Transpose; Speed = song.Speed; Settings.ChordSpreadMs = Math.Clamp(song.ChordSpread, 0, 50);
         Settings.PerformanceMode = Enum.IsDefined(song.PerformanceMode) ? song.PerformanceMode : PlaybackPerformanceMode.Normal;
+        Settings.NoteDuration = (song.NoteDuration ?? new()).Validated(); Settings.RangePolicy = Enum.IsDefined(song.RangePolicy) ? song.RangePolicy : RangePolicy.Ignore;
+        Settings.ShiftStrategy = Enum.IsDefined(song.ShiftStrategy) ? song.ShiftStrategy : ShiftStrategy.GroupSafe;
+        Settings.ChordMode = Enum.IsDefined(song.ChordMode) ? song.ChordMode : ChordMode.Auto;
         loadedSong = song;
         Raise(nameof(Settings)); SelectedTab = 0; Log("Música carregada da biblioteca.");
     }

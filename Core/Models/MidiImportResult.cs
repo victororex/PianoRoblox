@@ -1,7 +1,10 @@
 namespace PianoRoblox.Core.Models;
 
 public sealed record MidiNoteEvent(double TimeMs, int MidiNote, int Velocity, int Channel,
-    int TrackIndex, string TrackName, int ProgramNumber, string InstrumentName, double DurationMs, bool IsPercussion);
+    int TrackIndex, string TrackName, int ProgramNumber, string InstrumentName, double DurationMs, bool IsPercussion)
+{
+    public bool HasNoteOff { get; init; }
+}
 
 public sealed record MidiTrackInfo(int TrackIndex, string Name, string InstrumentName, int[] Channels,
     int[] Programs, int NoteCount, int? LowestNote, int? HighestNote, int OutOfRangeCount, int PercussionNoteCount)
@@ -13,6 +16,7 @@ public sealed record MidiAnalysis(int NoteCount, int EventCount, int TrackCount,
     int MaxChordNotes, int PeakNotesPer250Ms, int PeakNotesPerSecond, int PeakEventsPerSecond,
     double AverageNotesPerSecond)
 {
+    public int PeakTransitionsPerSecond { get; init; }
     public string Complexity => MaxChordNotes <= 4 && PeakNotesPerSecond <= 25 ? "Baixa" :
         MaxChordNotes <= 8 && PeakNotesPerSecond <= 45 ? "Moderada" : "Muito alta";
 }

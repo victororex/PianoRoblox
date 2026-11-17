@@ -1,155 +1,128 @@
-# PianoRoblox V2
+# PianoRoblox V3 — 3.0.0
 
-Player desktop para Windows em C# / .NET 8 / WPF. Evolução incremental da V1: MIDI, sheets, JSON, SendInput, Play/Pause/Stop, velocidade, transposição, alcance, teclado virtual, timeline, biblioteca e atalhos continuam disponíveis.
+Player desktop Windows x64 em C# / .NET 8 / WPF, atualizado sobre a V2 existente. MIDI, sheets, JSON, Smart Optimize, teclado virtual, timeline, playlists, fila e atalhos são preservados.
 
 ## Executar
 
-No outro PC, entre na sua conta GitHub e baixe **PianoRoblox-v2-win-x64.zip** na [página de releases](https://github.com/victororex/PianoRoblox/releases/latest). Extraia o ZIP e abra **PianoRoblox.exe**. O repositório é privado, portanto o download exige acesso à conta.
+Abra **PianoRoblox.exe** no pacote extraído; no workspace, ele fica em **artifacts/publish-v3/PianoRoblox.exe**. A publicação é autocontida e em arquivo único: não exige instalar .NET. A publicação da V2 não é sobrescrita. O executável não possui instalador ou assinatura digital.
 
-Para levar também músicas, playlists e configurações, siga [TRANSFERIR.md](TRANSFERIR.md).
+1. Abra uma experiência Roblox com piano controlado por teclado, ative o piano e feche o chat do jogo.
+2. Importe um MIDI, importe JSON ou analise uma sheet.
+3. Confira as trilhas, Smart Optimize e **Compatibilidade com o piano**.
+4. Para MIDI novo, Hybrid é selecionado. Para uma música antiga da biblioteca, o modo Legacy permanece até você alterá-lo e salvar os ajustes.
+5. Clique Play e volte ao jogo durante a contagem; ou use F6 já no Roblox. F7 pausa/retoma e F8 para.
+6. Na Biblioteca, selecione uma playlist e clique **Reproduzir tudo**, sem escolher uma faixa. Em **Todas as músicas**, use **Reproduzir biblioteca inteira**.
 
-Os 38 MIDIs salvos pelo usuário estão na pasta [musicas pianoblox](musicas%20pianoblox/). Baixe o repositório por **Code → Download ZIP**, extraia e escolha os arquivos pelo botão **Importar MIDI** do aplicativo.
+A proteção de foco reconhece RobloxPlayerBeta.exe, independentemente da experiência. Ela verifica o processo em foco, não se o piano/chat está selecionado. O perfil continua **Legacy C2–C7, 61 Keys**, com as teclas originais: [MAPPING.md](MAPPING.md). ScanCode e VirtualKey permanecem disponíveis.
 
-Abra **artifacts/publish-v2/PianoRoblox.exe**. A publicação Windows x64 é autocontida e não exige instalar .NET no computador de destino. Pode distribuir apenas o executável. Não há instalador ou assinatura digital.
+## Duração das notas
 
-1. Abra uma experiência Roblox com piano controlável por teclado, ative o piano e feche o chat do jogo.
-2. Importe MIDI/JSON ou analise uma sheet.
-3. Em MIDI, confira as trilhas e o resultado do Smart Optimize. Auto é o padrão.
-4. Mantenha a proteção de foco ativada. Clique Play e volte ao Roblox durante a contagem de 3 segundos, ou use F6 já no jogo.
-5. F7 pausa/retoma; F8 para. Ao perder o foco, o player pausa.
+| Modo | Comportamento |
+|---|---|
+| LegacyTap | Mesmo mecanismo de acordes da V2, com Key Hold fixo de 1–100 ms. |
+| MidiSustain | Note Down no início e Note Up no término musical de cada nota. Sustentações compatíveis se sobrepõem. |
+| Hybrid | Usa as durações explícitas, com mínimo/máximo configuráveis. É o padrão de importações MIDI novas. |
 
-A detecção usa RobloxPlayerBeta.exe, independentemente da experiência. Ela confirma o processo em foco, não se o piano ou o chat está selecionado. O perfil inicial é **Legacy C2–C7 61 Keys**, com o mapeamento exato da V1: [tabela completa](MAPPING.md). ScanCode é padrão; VirtualKey continua disponível. Teste as teclas pretas no seu layout físico.
+Padrões de sustain: mínimo 8 ms, máximo **0 (sem limite)**, Release Gap 2 ms, overlap e retrigger ativados; hold estimado 8 ms. O mínimo/máximo só modifica durações em Hybrid. Um máximo configurado gera aviso e contagem das notas limitadas. Desligar Sustain Enabled volta ao Legacy.
 
-## MIDI e Smart Optimize
+Sheets e JSON V2 não possuem duração individual: o aplicativo informa que o hold é estimado, sem apresentá-lo como sustain original. MIDI sem Note Off também recebe essa indicação. MIDI Sustain não simula pedal CC64, dinâmica acústica nem instrumentos; envia entrada normal do Windows.
 
-O pipeline conserva instante, pitch, velocity, canal, trilha/nome, programa/instrumento, duração e percussão antes de criar a sequência. Aceita MIDI formato 0/1 e respeita mudanças de tempo; formato 2, com sequências independentes, é rejeitado. Note On com velocity zero atua como Note Off.
+O scheduler usa um único worker, Stopwatch/PlaybackClock e uma timeline de ataques/liberações. A velocidade de 50–150% afeta os dois eventos, inclusive quando muda durante uma nota. Não existe Task ou timer por nota. Liberações não passam pelo limitador de densidade nem pela política de descarte de ataques atrasados.
 
-O canal 10 de General MIDI (índice 9) é percussão. **Ignorar bateria/percussão** começa ativado; trilhas exclusivamente de bateria começam desmarcadas. Trilhas mistas preservam suas notas melódicas. Para incluir bateria, selecione sua trilha e desligue o filtro.
+Pause, Stop, Next, Previous, seek, troca, perda de foco, falha e fechamento liberam teclas e modificadores. Pausa congela o tempo. **Retomada e seek reatacam notas que atravessam a posição, somente pelo tempo restante**; notas já terminadas ficam silenciosas. No Legacy, seek conserva a regra V2 de iniciar nos ataques posteriores.
 
-A tabela mostra nome, instrumento, canais de 1 a 16, quantidade, faixa e notas fora de C2–C7. Cada checkbox recalcula em segundo plano. Resultados antigos não substituem cálculos mais recentes. Play, salvar e exportar aguardam a otimização. Mudanças durante uma reprodução valem no próximo início.
+Repetições do mesmo pitch liberam a nota anterior antes do próximo ataque; IDs distintos impedem que o Note Off antigo solte a nova nota. Release Gap também é respeitado como mínimo físico em tempo real, sem bloquear outras liberações. Com retrigger desativado, intervalos sobrepostos do mesmo pitch são unidos até o maior término.
 
-| Preset | Merge | Acorde máximo | Velocity mínima | Notas / 250 ms | Notas / 1 s |
+### Limites físicos e Roblox
+
+`t` e `Shift+t` compartilham uma tecla física. O teclado Windows também possui um único estado global de Shift. Quando sustentações exigem estados incompatíveis, a nota anterior precisa ser liberada; esse conflito é contabilizado. GroupSafe agrupa notas compatíveis; Sequential e Chord Spread continuam disponíveis. Ataques impossíveis com o gap/Shift configurado são ignorados com aviso.
+
+Nem todo piano sustenta áudio enquanto a tecla está pressionada: algumas experiências usam amostras de duração fixa. Use **Teste → Testar sustain e polifonia** para conferir no jogo. O envio correto de Down/Up não garante som idêntico ao MIDI ou reconhecimento pelo Roblox.
+
+## Smart Optimize e títulos
+
+O título de apresentação é independente do arquivo físico. MIDIs da biblioteca usam Song.Title; importações novas usam o nome original. Renomear e salvar ajustes atualiza Player, Smart Optimize, biblioteca, timeline e barra inferior, mantendo o arquivo GUID. Cálculos obsoletos são cancelados e não podem restaurar um título anterior.
+
+O pipeline mantém pitch, tempo, duração, velocity, trilha e prioridade até o scheduler. Duplicatas no mesmo grupo conservam o maior término; o merge compensa a antecipação do início. Transposição, dobramento por oitava e JSON mantêm as durações. A análise exibe a carga conjunta de ataques e liberações.
+
+| Preset | Merge | Máximo/acorde | Velocity mínima | Notas/250 ms | Notas/s |
 |---|---:|---:|---:|---:|---:|
-| Original | 0 ms | sem simplificação | 0 | sem limitador | sem limitador |
+| Original | 0 ms | 128 | 0 | 10000 | 40000 |
 | Balanced | 6 ms | 6 | 15 | 10 | 32 |
 | Performance | 8 ms | 4 | 25 | 7 | 22 |
-| Custom | ajustável | ajustável | ajustável | ajustável | ajustável |
+| Custom | editável | editável | editável | editável | editável |
 
-**Auto** analisa as trilhas escolhidas após filtro de percussão e dedupe exato: acorde máximo ≤4 e pico ≤25 notas/s → Original; ≤8 e ≤45 → Balanced; demais → Performance. O usuário pode escolher outro preset. Campos numéricos são editáveis em Custom.
+Auto escolhe Original para acorde ≤4 e pico ≤25 notas/s; Balanced até 8/45; demais usam Performance. Seleção de trilhas, percussão (canal MIDI 10), prioridade melódica e simulação de performance permanecem. Original não simplifica o conteúdo além de seleção/filtro/dedupe. BPM não é alterado para reduzir carga. A simulação SendInput é uma estimativa de Legacy/GroupSafe, sem medir FPS.
 
-Original aplica somente seleção de trilhas, filtro opcional de percussão e dedupe de pitch no mesmo instante. Preserva notas fracas. Balanced/Performance removem notas abaixo da velocity mínima e usam:
+## Compatibilidade com o piano
 
-- **Merge ancorado:** 1000, 1002 e 1004 ms viram um acorde em 1000 ms com janela de 6 ms. A janela não se prolonga por encadeamento.
-- **Dedupe:** conserva uma nota por pitch, favorecendo velocity/duração, e guarda as trilhas de origem.
-- **Acordes:** heurística determinística prioriza melodia aguda, baixo, velocity, provável trilha principal e distribuição entre registros. Melody Priority é opcional.
-- **Density Limiter:** janelas deslizantes de 250 e 1000 ms removem as notas menos importantes. Uma nota melódica posterior pode substituir acompanhamento anterior. Janelas são semiabertas: dois ataques separados por exatamente 1000 ms não ocupam a mesma janela de um segundo.
+O painel mostra total, abaixo, dentro, acima e percentual de cobertura das trilhas escolhidas antes da simplificação. Analisa deslocamentos de **−24 a +24 semitons** e sugere a maior cobertura, preferindo o menor deslocamento em empates. A sugestão só é aplicada quando você clica no botão.
 
-**BPM e duração são preservados.** O limitador descarta notas sem mudar timestamps. Somente o merge antecipa ataques dentro de sua janela de poucos milissegundos. Velocidade manual continua independente, de 50% a 150%.
-
-“Antes” representa o MIDI completo; “Depois” inclui todos os filtros das trilhas escolhidas. A redução inclui bateria e trilhas desativadas. Nenhum MIDI original é regravado.
-
-**Simular Performance** compara Original, Balanced e Performance sem enviar teclas. As chamadas SendInput são estimativas para Auto/GroupSafe antes da transposição, incluindo a liberação final dos acordes. Spread, falhas, pausas e limpeza extra podem alterar esse número. Não mede FPS.
-
-## Playback e envio de teclas
-
-O relógio continua baseado em Stopwatch/PlaybackClock e tempos absolutos. O custo de um acorde não é somado ao próximo timestamp. Pausa congela o relógio e velocidade muda sem saltar a posição. A resolução solicitada de 1 ms é liberada ao terminar. Não há spin loop.
-
-- **Auto / Simultaneous:** naturais em lote. GroupSafe agrupa notas contíguas com o mesmo estado de Shift e teclas físicas distintas. Transições de Shift são serializadas, preservando a ordem.
-- **Spread:** sequência por nota. Spread de 0–50 ms; Key Hold de 1–100 ms. O custo de pressionar/soltar e preparar Shift limita o intervalo mínimo real.
-- **Normal:** esperas assíncronas limitadas, recalculadas pelo próximo alvo absoluto.
-- **LowLatency:** esperas menores, de até 2 ms, sem espera ocupada.
-- **FpsFriendly:** limita despachos a 8 notas/50 ms e 32 notas/s de tempo real; descarta eventos quando necessário. Não altera BPM.
-
-LateEventPolicy preserva eventos recentes; acima de 80 ms descarta baixa prioridade e acima de 160 ms descarta inclusive os antigos de alta prioridade. Recuperação de eventos atrasados mais de 40 ms fica limitada a 8 notas/50 ms.
-
-Um acorde natural usa uma chamada SendInput para os downs e uma para a liberação. Teclas previstas são rastreadas antes da chamada nativa. Envios parciais provocam limpeza também das teclas incertas. Stop, Pause, perda de foco, seek, troca de música e saída liberam notas e os dois lados de Shift/Ctrl/Alt. Falhas de liberação conservam o estado incerto para outra tentativa.
-
-A duração original das notas é metadado MIDI; o envio usa **Key Hold**, sem sustain/pedal/dinâmica. Ao retomar um acorde interrompido, ele pode ser reenviado. O retorno de SendInput não confirma que o jogo aceitou a nota.
+Ignore descarta notas fora do alcance; Octave dobra por oitavas; Ask pergunta antes de tocar. A transposição manual continua disponível. Quando o dobramento junta pitches, o maior término é conservado e a colisão aparece no Log. A abstração PianoProfile aceita outros layouts, mas esta entrega não inventa mapeamentos de experiências nem inclui editor visual de perfis.
 
 ## Biblioteca, playlists e fila
 
-Na Biblioteca, expanda **Salvar música carregada / atualizar ajustes**, edite título/artista/origem e adicione a música. O arquivo é copiado para a pasta local. **Salvar ajustes da carregada** atualiza uma entrada existente: transposição, velocidade, spread, preset, parâmetros Custom, trilhas, percussão, prioridade melódica e performance mode.
+- Reproduzir tudo segue a ordem salva da playlist; em Todas as músicas, segue a ordenação escolhida, incluindo a biblioteca inteira mesmo com pesquisa/filtro visível.
+- Reproduzir aleatoriamente escolhe uma primeira faixa e uma permutação sem repetição no ciclo.
+- Adicionar todas à fila mantém a prioridade da fila manual sobre o restante da playlist, conforme a regra V2; Repeat One tem prioridade na conclusão automática.
+- O menu de contexto **Reproduzir a partir daqui** inicia na faixa selecionada e continua pelas demais.
+- Playlist vazia e arquivos ausentes apresentam mensagem; entradas ausentes são ignoradas. A faixa atual fica destacada, com título/artista, contexto, número, próxima música, shuffle/repeat e modo de duração na barra persistente.
+- Pesquisa por título/artista, filtro MIDI/Sheet/JSON, ordenação por título/artista/duração/data e seleção múltipla (Ctrl/Shift) para adicionar à playlist.
+- Criar, renomear, excluir e reordenar playlists; ↑/↓ permanecem como alternativa estável ao arrastar e soltar.
+- O botão **Abrir localização dos arquivos** abre Songs/. Remover uma entrada ou playlist não apaga os arquivos.
 
-Digite um nome e use **+ Nova playlist**. Em **Todas as músicas**, selecione a música e a playlist de destino para adicionar. Dentro da playlist, use ↑/↓, remover, renomear e excluir. Excluir playlist não exclui músicas. Remover da biblioteca preserva o arquivo local; referências ausentes são ignoradas na navegação.
+Next cancela e aguarda a liberação do único player antes de iniciar a próxima faixa. A conclusão natural avança automaticamente usando a contagem entre músicas. Stop invalida continuações/carregamentos pendentes. Previous antes de 3 segundos volta no histórico; depois reinicia a atual. Repeat Playlist cria um novo ciclo; a próxima faixa é pré-calculada, inclusive no fim do ciclo aleatório.
 
-Duplo clique carrega e toca; dentro de playlist, inicia naquele ponto. O player inferior fica disponível em todas as abas.
+Use **Salvar ajustes da carregada** para persistir título/artista, velocidade, transposição, alcance, spread, modo de acorde/Shift, performance, otimização/trilhas e configuração de duração por música.
 
-- **Fila:** entradas adicionadas têm prioridade sobre o restante da playlist e não a alteram. IDs próprios permitem remover uma duplicata específica. Limpar próximas remove a ordem pendente, mantendo a música atual.
-- **Shuffle:** pré-calcula uma permutação Fisher–Yates; visita todas uma vez por ciclo e mantém histórico. Evita repetir imediatamente a última música ao iniciar outro ciclo quando possível.
-- **Next:** cancela e libera antes de iniciar a próxima. Avança automaticamente no término. Contagem entre músicas padrão: 0, configurável.
-- **Previous:** antes de 3 segundos musicais, volta no histórico; depois disso reinicia a atual. Sem histórico, reinicia a atual.
-- **Repeat Off:** para ao fim. **Repeat Playlist:** novo ciclo. **Repeat One:** repete ao concluir; Next manual avança.
+## Sheets e JSON compatível
 
-Um único PlaybackService atende todas as músicas. Stop durante carregamento invalida a intenção de tocar.
+Sheets: `a` = nota, `[abc]` = acorde, `{abcd}` = sequência rápida, `-` = pausa; espaços/quebras de linha somam tempo. Padrões 120 BPM, espaço ¼ beat e hífen ½ beat. Maiúsculas exigem Shift. Corrija caracteres inválidos antes de tocar. Após editar, analise novamente.
 
-## Sheets e JSON
+JSON V2 com `keys` continua importando. Na V3, `notes` é opcional e permite durações individuais:
 
-**Esta sheet não contém timing preciso. O ritmo será estimado.**
-
-| Sintaxe | Interpretação |
-|---|---|
-| a | nota |
-| [6rtu] | acorde |
-| {abcd} | sequência rápida, 1/16 beat por nota |
-| - / -- | uma / duas pausas |
-| espaço, tab, quebra de linha | separação temporal; CRLF conta uma vez |
-| tuo | três notas com passo padrão |
-
-Padrões: 120 BPM, espaço 1/4 beat, hífen 1/2 beat. Separadores explícitos substituem o passo implícito entre tokens; espaços/hífens consecutivos somam tempo. Em {abcd}, o próximo separador começa na última nota rápida. Pausas iniciais/finais são preservadas. [6rtu]--[rtu]--[etu]--[etu] começa em 0, 500, 1000 e 1500 ms nos padrões indicados.
-
-Maiúsculas exigem Shift. Corrija caracteres desconhecidos e delimitadores incompletos antes de tocar. #, & e ) não são notas do perfil atual. Após editar uma sheet, analise novamente antes de salvar.
-
-JSON compatível com V1:
-
-~~~json
+```json
 {
-  "title": "Teste",
+  "title": "Exemplo",
   "bpm": 120,
-  "durationMs": 1100,
   "events": [
-    { "timeMs": 0, "keys": ["t", "u", "o"] },
-    { "timeMs": 1000, "keys": ["T"] }
+    {
+      "timeMs": 1000,
+      "notes": [
+        { "midi": 60, "durationMs": 1500, "velocity": 100, "trackIndex": 0 },
+        { "midi": 64, "durationMs": 500 }
+      ]
+    }
   ]
 }
-~~~
+```
 
-BPM e duração são opcionais ao importar. Exportação aplica otimização MIDI, transposição e alcance, preservando o tempo original; velocidade manual não é embutida. Fora de C2–C7: Ignore descarta, Octave desloca por oitavas, Ask pergunta. Seek inicia nos ataques posteriores à posição, sem reconstruir sustentações.
+A exportação inclui também `keys` para leitores antigos. BPM e duração total são opcionais ao importar. Duração individual ausente permanece ausente. Exportar aplica otimização/transposição/alcance, mas não embute a velocidade manual.
 
-## Dados e migração
+## Dados e backups
 
-Dados em **%AppData%/PianoRoblox/**: settings.json, songs.json, playlists.json e pasta Songs.
+Mantido **%AppData%/PianoRoblox/**: songs.json, settings.json, playlists.json e Songs/. Arquivos físicos GUID não são renomeados ou apagados. Campos novos possuem defaults V2. Antes da primeira gravação V3, os índices e backups existentes são copiados para **Backups/before-v3/**; Songs/ permanece intacta.
 
-Se a pasta nova não existir e **%AppData%/GakuranAutoPiano/** existir, copia os dados para uma pasta temporária irmã e publica a cópia completa ao terminar. Preserva a pasta antiga, não sobrescreve a nova e registra **“Dados da versão anterior migrados para PianoRoblox.”** Links/junctions não são seguidos. Uma cópia interrompida não se torna a biblioteca ativa.
+Gravações são atômicas, com .bak. JSON inválido tenta backup válido e mostra aviso. O original é preservado; uma gravação após recuperação arquiva o conteúdo inválido em .corrupt-… sem substituir o backup válido. Se ambos forem inválidos, leitura/gravação falham explicitamente: não há reset silencioso nem salvamento de lista vazia por falha de leitura. A migração V1 continua preservando a pasta anterior. Para transferência: [TRANSFERIR.md](TRANSFERIR.md).
 
-Novos campos têm defaults para JSON antigo. Índices/configurações são escritos em temporário, substituídos atomicamente e mantêm backup .bak. Playlists podem recuperar o backup quando o JSON atual está inválido.
+## Diagnósticos e atalhos
 
-Atalhos: **F4** anterior, **F5** próxima, **F6** play, **F7** pausa, **F8** stop, **F9** +5%, **F10** −5%, **F11** 100%. Conflitos são registrados no Log. F4/F5 só são adicionados à configuração antiga se não conflitam com um código salvo. Hotkeys podem ser editadas no settings.json com o app fechado.
+Diagnósticos opcionais exibem notas executadas/puladas, Down/Up, eventos atrasados, maior atraso, teclas ativas e conflitos. A UI atualiza esses números no máximo duas vezes por segundo; teclado/timeline continuam a 25 FPS com buffer visual. Os números descrevem o envio local, não recebimento de áudio ou FPS do jogo.
 
-## Desenvolvimento e publicação
+F4 anterior · F5 próxima · F6 iniciar · F7 pausar/retomar · F8 parar · F9 +5% · F10 −5% · F11 100%. Atalhos podem ser editados em settings.json com o app fechado; conflitos são registrados.
 
-Windows x64, SDK .NET 8 ou mais recente com destino .NET 8. Produção usa DryWetMidi 8.0.3; testes usam xUnit 2.9.2, runner 2.8.2 e Microsoft.NET.Test.Sdk 17.11.1.
+## Desenvolvimento
 
-~~~powershell
+Windows x64, SDK .NET 8 ou mais recente, destino .NET 8. DryWetMidi 8.0.3; xUnit 2.9.2; runner 2.8.2; Microsoft.NET.Test.Sdk 17.11.1.
+
+```powershell
 dotnet restore PianoRoblox.sln
 dotnet build PianoRoblox.sln -c Release
 dotnet test PianoRoblox.sln -c Release
-dotnet run --project PianoRoblox.csproj
-dotnet publish PianoRoblox.csproj -p:PublishProfile=Windows
-~~~
+dotnet publish PianoRoblox.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:DebugType=none -p:DebugSymbols=false -o artifacts/publish-v3
+```
 
-Equivalente explícito de publicação:
+WPF não usa trimming. O SDK portátil usado nesta máquina fica em artifacts/tooling/dotnet/ e não integra o aplicativo distribuído.
 
-~~~powershell
-dotnet publish PianoRoblox.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -o artifacts/publish-v2
-~~~
-
-WPF não usa trimming. Bibliotecas nativas podem ser extraídas para pasta temporária pelo runtime. Nesta máquina foi usado cache NuGet curto em pasta temporária para evitar limites de caminho do Windows.
-
-[Arquitetura](ARCHITECTURE.md) · [Validação](VALIDATION.md) · [Relatório dos 16 itens da V2](V2-REPORT.md)
-
-## Limites
-
-Os testes usam transportes simulados e não enviam notas ao desktop. Renderizam WPF e verificam bindings. O benchmark sintético valida contagens e BPM; **FPS real e reconhecimento musical dentro do Roblox dependem de avaliação no jogo**. Não foi fornecido MIDI real de Black Rover para comparação auditiva.
-
-Cache persistente, áudio local, sustain por Note Off, perfis além de Legacy61 e exportação AutoHotkey ficaram fora desta entrega. O app não modifica arquivos ou memória do Roblox.
+[Arquitetura](ARCHITECTURE.md) · [Validação V3](VALIDATION.md) · [Relatório V3](V3-REPORT.md) · [Histórico V2](V2-REPORT.md)
 

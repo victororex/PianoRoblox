@@ -38,8 +38,10 @@ public sealed class MidiOptimizationService
             var group = strong[start..end].GroupBy(n => n.MidiNote).Select(g =>
             {
                 var best = g.OrderByDescending(n => n.Velocity).ThenByDescending(n => n.DurationMs).ThenBy(n => n.TrackIndex).First();
-                var moved = best with { TimeMs = anchor,
-                    DurationMs = best.DurationMs > 0 ? best.DurationMs + best.TimeMs - anchor : 0 };
+                // Duplicates keep the latest Note Off, regardless of which velocity wins.
+                bool hasEnd = g.Any(n => n.HasNoteOff || n.DurationMs > 0);
+                double latestEnd = g.Where(n => n.HasNoteOff || n.DurationMs > 0).Select(n => n.TimeMs + n.DurationMs).DefaultIfEmpty(anchor).Max();
+                var moved = best with { TimeMs = anchor, DurationMs = Math.Max(0, latestEnd - anchor), HasNoteOff = hasEnd };
                 return new Candidate(moved, g.Select(n => n.TrackIndex).Distinct().Order().ToArray());
             }).OrderBy(n => n.Note.MidiNote).ToList();
             duplicates += end - start - group.Count;
@@ -66,7 +68,9 @@ public sealed class MidiOptimizationService
         var outputNotes = retained.Select(c => c.Note).ToArray();
         var events = retained.GroupBy(c => c.Note.TimeMs).Select(g => new MusicEvent(g.Key, g.Select(c => c.Note.MidiNote).ToArray())
         {
-            Priority = g.Max(c => c.Score), SourceTracks = g.SelectMany(c => c.SourceTracks).Distinct().Order().ToArray()
+            Priority = g.Max(c => c.Score), SourceTracks = g.SelectMany(c => c.SourceTracks).Distinct().Order().ToArray(),
+            NoteDetails = g.Select(c => new MusicNote(c.Note.MidiNote, c.Note.HasNoteOff || c.Note.DurationMs > 0 ? c.Note.DurationMs : null,
+                c.Note.Velocity, c.Note.TrackIndex, c.Score)).ToArray()
         }).ToList();
         var sequence = new MusicSequence(import.Title, import.InitialBpm, import.DurationMs, events);
         return new(sequence, outputNotes, import.Analysis, analyzer.Analyze(outputNotes, import.DurationMs), preset, recommended,

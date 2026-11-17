@@ -56,7 +56,7 @@ public sealed class MidiImportViewModel : ObservableObject
     public string MetadataSummary => Data is { } data
         ? $"{data.Title} • {MainViewModel.FormatTime(data.DurationMs)} • BPM inicial {data.InitialBpm:0.##}\n{data.Tracks.Count} trilhas • {data.Notes.Count} notas MIDI • Complexidade: {data.Analysis.Complexity}" : "";
     public string BeforeSummary => Result is { } result ? Describe(result.Before) : "";
-    public string AfterSummary => Result is { } result ? $"{Describe(result.After)}\nRedução: {result.ReductionPercent:0.0}%" : "";
+    public string AfterSummary => Result is { } result ? $"{Describe(result.After)}\nRedução: {result.ReductionPercent:0.0}%\nPico de ataques + liberações: {result.After.PeakTransitionsPerSecond}/s (liberações obrigatórias)" : "";
     public string PercussionSummary => Result is { } result
         ? $"Percussão encontrada: {result.PercussionFound} notas • Removidas: {result.PercussionRemoved}" : "";
     public string RecommendationSummary => Result is { } result
@@ -66,12 +66,12 @@ public sealed class MidiImportViewModel : ObservableObject
 
     public MidiImportViewModel(Action<Exception> onError) => BenchmarkCommand = new AsyncCommand(BenchmarkAsync, onError);
 
-    public async Task LoadAsync(string path, OptimizationSettings? options = null, IReadOnlyCollection<int>? selectedTracks = null)
+    public async Task LoadAsync(string path, OptimizationSettings? options = null, IReadOnlyCollection<int>? selectedTracks = null, string? displayTitle = null)
     {
         Clear(); long ticket = version; IsBusy = true; Status = "Lendo MIDI…";
         try
         {
-            var data = await Task.Run(() => reader.ReadDetailed(path));
+            var data = await Task.Run(() => reader.ReadDetailed(path, displayTitle));
             if (ticket != version) throw new OperationCanceledException();
             updating = true; Data = data; settings = (options ?? new()).Validated();
             var selected = selectedTracks?.ToHashSet();
@@ -88,6 +88,13 @@ public sealed class MidiImportViewModel : ObservableObject
     }
 
     public OptimizationSettings CaptureSettings() => settings.Validated();
+    public void SetDisplayTitle(string title)
+    {
+        if (Data == null || Data.Title == title) return;
+        Data = Data with { Title = title };
+        // Invalidate calculations carrying the previous title, as well as their SequenceChanged callbacks.
+        Schedule(); Raise(nameof(MetadataSummary)); Raise(nameof(Data));
+    }
     public async Task EnsureReadyAsync()
     {
         Task current;

@@ -8,12 +8,14 @@ public sealed class PlaybackQueueService
     private readonly Random random;
     private readonly Func<Guid, bool> available;
     private readonly List<Guid> playlist = [];
+    private readonly List<Guid> cycleOrder = [];
     private readonly List<QueueItem> pending = [];
     private readonly List<QueueItem> queued = [];
     private readonly List<QueueItem> history = [];
     private int historyIndex = -1;
     private bool shuffle;
     private RepeatMode repeatMode;
+    private List<QueueItem>? nextCycle;
 
     public PlaybackQueueService(Func<Guid, bool>? isAvailable = null, int? randomSeed = null)
     {
@@ -24,13 +26,23 @@ public sealed class PlaybackQueueService
     public event Action? Changed;
     public QueueItem? Current => historyIndex >= 0 && historyIndex < history.Count ? history[historyIndex] : null;
     public bool HasContext => Current != null || queued.Count > 0 || pending.Count > 0;
-    public IReadOnlyList<QueueItem> Upcoming => history.Skip(historyIndex + 1).Concat(queued).Concat(pending)
-        .Where(item => available(item.SongId)).ToList();
+    public IReadOnlyList<QueueItem> Upcoming
+    {
+        get
+        {
+            var next = history.Skip(historyIndex + 1).Concat(queued).Concat(pending).Where(item => available(item.SongId)).ToList();
+            if (next.Count == 0 && RepeatMode == RepeatMode.Playlist) next.AddRange(PrepareNextCycle());
+            return next;
+        }
+    }
     public IReadOnlyList<QueueItem> History => history.Take(historyIndex + 1).ToList();
+    public int TrackCount => playlist.Count;
+    public int TrackNumber => Current is { FromPlaylist: true } item ? cycleOrder.IndexOf(item.SongId) + 1 : 0;
+    public QueueItem? NextPreview => RepeatMode == RepeatMode.One && Current != null ? Current : Upcoming.FirstOrDefault();
     public RepeatMode RepeatMode
     {
         get => repeatMode;
-        set { if (repeatMode == value) return; repeatMode = value; Changed?.Invoke(); }
+        set { if (repeatMode == value) return; repeatMode = value; nextCycle = null; Changed?.Invoke(); }
     }
     public bool Shuffle
     {
@@ -39,6 +51,7 @@ public sealed class PlaybackQueueService
         {
             if (shuffle == value) return;
             shuffle = value;
+            nextCycle = null;
             if (shuffle) ShuffleInPlace(pending);
             else pending.Sort((a, b) => playlist.IndexOf(a.SongId).CompareTo(playlist.IndexOf(b.SongId)));
             Changed?.Invoke();
@@ -48,6 +61,7 @@ public sealed class PlaybackQueueService
     public QueueItem? StartPlaylist(IEnumerable<Guid> songIds, Guid? startSongId = null)
     {
         playlist.Clear(); playlist.AddRange(songIds.Where(available).Distinct());
+        cycleOrder.Clear(); nextCycle = null;
         pending.Clear(); history.Clear(); historyIndex = -1;
         if (playlist.Count == 0) { Changed?.Invoke(); return null; }
         int start = startSongId.HasValue ? playlist.IndexOf(startSongId.Value) : 0;
@@ -55,6 +69,7 @@ public sealed class PlaybackQueueService
         var current = NewItem(playlist[start], true);
         pending.AddRange((shuffle ? playlist.Where(id => id != current.SongId) : playlist.Skip(start + 1)).Select(id => NewItem(id, true)));
         if (shuffle) ShuffleInPlace(pending);
+        cycleOrder.Clear(); cycleOrder.AddRange(shuffle ? new[] { current.SongId }.Concat(pending.Select(p => p.SongId)) : playlist);
         Visit(current);
         return current;
     }
@@ -62,7 +77,7 @@ public sealed class PlaybackQueueService
     public QueueItem? StartSong(Guid songId)
     {
         if (!available(songId)) return null;
-        playlist.Clear(); pending.Clear(); history.Clear(); historyIndex = -1;
+        playlist.Clear(); cycleOrder.Clear(); nextCycle = null; pending.Clear(); history.Clear(); historyIndex = -1;
         var item = NewItem(songId, false); Visit(item); return item;
     }
 
@@ -76,6 +91,7 @@ public sealed class PlaybackQueueService
     {
         bool removed = queued.RemoveAll(item => item.Id == entryId) > 0;
         removed |= pending.RemoveAll(item => item.Id == entryId) > 0;
+        removed |= nextCycle?.RemoveAll(item => item.Id == entryId) > 0;
         // An item revisited through Previous may also be displayed in the forward history.
         for (int i = history.Count - 1; i > historyIndex; i--)
             if (history[i].Id == entryId) { history.RemoveAt(i); removed = true; }
@@ -85,14 +101,14 @@ public sealed class PlaybackQueueService
 
     public void ClearUpcoming()
     {
-        queued.Clear(); pending.Clear(); playlist.Clear();
+        queued.Clear(); pending.Clear(); playlist.Clear(); cycleOrder.Clear(); nextCycle = null;
         if (historyIndex + 1 < history.Count) history.RemoveRange(historyIndex + 1, history.Count - historyIndex - 1);
         Changed?.Invoke();
     }
 
     public void Clear()
     {
-        queued.Clear(); pending.Clear(); playlist.Clear(); history.Clear(); historyIndex = -1;
+        queued.Clear(); pending.Clear(); playlist.Clear(); cycleOrder.Clear(); nextCycle = null; history.Clear(); historyIndex = -1;
         Changed?.Invoke();
     }
 
@@ -108,14 +124,8 @@ public sealed class PlaybackQueueService
         var next = TakeAvailable(queued) ?? TakeAvailable(pending);
         if (next == null && RepeatMode == RepeatMode.Playlist)
         {
-            pending.AddRange(playlist.Where(available).Select(id => NewItem(id, true)));
-            if (shuffle)
-            {
-                ShuffleInPlace(pending);
-                // Across cycle boundaries, also avoid immediately repeating the last song when possible.
-                if (pending.Count > 1 && pending[0].SongId == Current?.SongId)
-                    (pending[0], pending[1]) = (pending[1], pending[0]);
-            }
+            pending.AddRange(PrepareNextCycle()); nextCycle = null;
+            cycleOrder.Clear(); cycleOrder.AddRange(pending.Select(item => item.SongId));
             next = TakeAvailable(pending);
         }
         if (next == null) { Changed?.Invoke(); return null; }
@@ -133,6 +143,18 @@ public sealed class PlaybackQueueService
     }
 
     public void RefreshAvailability() => Changed?.Invoke();
+    private List<QueueItem> PrepareNextCycle()
+    {
+        if (nextCycle != null) return nextCycle.Where(item => available(item.SongId)).ToList();
+        nextCycle = playlist.Where(available).Select(id => NewItem(id, true)).ToList();
+        if (shuffle)
+        {
+            ShuffleInPlace(nextCycle);
+            if (nextCycle.Count > 1 && nextCycle[0].SongId == Current?.SongId)
+                (nextCycle[0], nextCycle[1]) = (nextCycle[1], nextCycle[0]);
+        }
+        return nextCycle;
+    }
     private static QueueItem NewItem(Guid songId, bool fromPlaylist) => new(Guid.NewGuid(), songId, fromPlaylist);
     private QueueItem? TakeAvailable(List<QueueItem> items)
     {

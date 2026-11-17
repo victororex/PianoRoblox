@@ -16,11 +16,14 @@ public sealed class AppSettings
     public InputMode InputMode { get; set; } = InputMode.ScanCode;
     public ChordMode ChordMode { get; set; } = ChordMode.Auto;
     public PlaybackPerformanceMode PerformanceMode { get; set; } = PlaybackPerformanceMode.Normal;
+    public ShiftStrategy ShiftStrategy { get; set; } = ShiftStrategy.GroupSafe;
     public bool RequireRobloxFocus { get; set; } = true;
     public RangePolicy RangePolicy { get; set; } = RangePolicy.Ignore;
     public bool ShowKeyboard { get; set; } = true;
     public bool DarkTheme { get; set; } = true;
     public bool DetailedLog { get; set; }
+    public bool PlaybackDiagnostics { get; set; }
+    public NoteDurationSettings NoteDuration { get; set; } = new();
     public Dictionary<string, int> Hotkeys { get; set; } = new()
     {
         ["Play"] = 0x75, ["Pause"] = 0x76, ["Stop"] = 0x77,
@@ -32,12 +35,14 @@ public sealed class AppSettings
     {
         ChordSpreadMs = Math.Clamp(ChordSpreadMs, 0, 50);
         KeyHoldMs = Math.Clamp(KeyHoldMs, 1, 100);
+        NoteDuration = (NoteDuration ?? new()).Validated();
         CountdownSeconds = Math.Clamp(CountdownSeconds, 0, 10);
         CountdownBetweenSongs = Math.Clamp(CountdownBetweenSongs, 0, 10);
         DefaultSpeed = double.IsFinite(DefaultSpeed) ? Math.Clamp(DefaultSpeed, 50, 150) : 100;
         if (!Enum.IsDefined(InputMode)) InputMode = InputMode.ScanCode;
         if (!Enum.IsDefined(ChordMode)) ChordMode = ChordMode.Auto;
         if (!Enum.IsDefined(PerformanceMode)) PerformanceMode = PlaybackPerformanceMode.Normal;
+        if (!Enum.IsDefined(ShiftStrategy)) ShiftStrategy = ShiftStrategy.GroupSafe;
         if (!Enum.IsDefined(RangePolicy)) RangePolicy = RangePolicy.Ignore;
         Hotkeys ??= new AppSettings().Hotkeys;
         if (!Hotkeys.ContainsKey("Previous") && !Hotkeys.ContainsValue(0x73)) Hotkeys["Previous"] = 0x73;
@@ -47,5 +52,5 @@ public sealed class AppSettings
 
 public sealed record PlaybackOptions(int SpreadMs, int HoldMs, ChordMode ChordMode, InputMode InputMode, bool RequireFocus,
     PlaybackPerformanceMode PerformanceMode = PlaybackPerformanceMode.Normal, int MaxCatchUpDelayMs = 80,
-    ShiftStrategy ShiftStrategy = ShiftStrategy.GroupSafe);
+    ShiftStrategy ShiftStrategy = ShiftStrategy.GroupSafe, NoteDurationSettings? NoteDuration = null);
 

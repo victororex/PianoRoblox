@@ -7,10 +7,11 @@ using PianoRoblox.Utilities;
 
 namespace PianoRoblox.ViewModels;
 
-public sealed record QueueSongRow(Guid EntryId, Song Song)
+public sealed record QueueSongRow(Guid EntryId, Song Song, int Position = 0)
 {
     public string Title => Song.Title;
     public string Artist => Song.Artist;
+    public string DisplayTitle => $"{Position}. {Title}";
 }
 
 /// <summary>Library, playlist editing and queue navigation without owning playback or MIDI conversion.</summary>
@@ -27,6 +28,18 @@ public sealed class LibraryViewModel : ObservableObject
     private Song? selectedSong;
     private QueueSongRow? selectedQueueItem;
     private string playlistName = "";
+    private string searchText = "", kindFilter = "Todos", sortOrder = "Ordem salva", playbackCollectionName = "";
+    public ObservableCollection<Song> SelectedSongs { get; } = [];
+    public string SearchText { get => searchText; set { if (Set(ref searchText, value)) RefreshSongs(); } }
+    public string KindFilter { get => kindFilter; set { if (Set(ref kindFilter, value)) RefreshSongs(); } }
+    public string SortOrder { get => sortOrder; set { if (Set(ref sortOrder, value)) RefreshSongs(); } }
+    public string[] KindFilters { get; } = ["Todos", "MIDI", "Sheet", "JSON"];
+    public string[] SortOrders { get; } = ["Ordem salva", "Título", "Artista", "Duração", "Data de adição"];
+    public string CollectionMessage { get; private set; } = "";
+    public string PlaybackCollectionName => playbackCollectionName;
+    public string TrackLabel => Queue.TrackNumber > 0 ? $"{Queue.TrackNumber} de {Queue.TrackCount}" : "Fila manual";
+    public string NextTitle => Queue.NextPreview is { } next ? Songs.FirstOrDefault(s => s.Id == next.SongId)?.Title ?? "—" : "Fim da lista";
+    public string PlayAllLabel => SelectedPlaylist == null ? "▶ Reproduzir biblioteca inteira" : "▶ Reproduzir tudo";
 
     public ObservableCollection<Song> Songs { get; }
     public ObservableCollection<Playlist> Playlists { get; } = [];
@@ -41,7 +54,7 @@ public sealed class LibraryViewModel : ObservableObject
             if (!Set(ref selectedPlaylist, value)) return;
             PlaylistName = value?.Name ?? "";
             if (value != null) TargetPlaylist = value;
-            RefreshSongs(); Raise(nameof(CollectionTitle));
+            RefreshSongs(); Raise(nameof(CollectionTitle)); Raise(nameof(PlayAllLabel));
         }
     }
     public Playlist? TargetPlaylist { get => targetPlaylist; set => Set(ref targetPlaylist, value); }
@@ -73,12 +86,17 @@ public sealed class LibraryViewModel : ObservableObject
     public ICommand ToggleShuffleCommand { get; }
     public ICommand CycleRepeatCommand { get; }
     public ICommand NextCommand { get; }
+    public ICommand PlayAllPlaylistCommand { get; }
+    public ICommand ShufflePlayPlaylistCommand { get; }
+    public ICommand QueueAllPlaylistCommand { get; }
+    public ICommand PlayFromHereCommand { get; }
 
     public LibraryViewModel(SongLibraryService library, ObservableCollection<Song> songs,
         Func<Song, Task> load, Func<Song, bool, Task> play, Action<Exception> onError, Action<string> log)
     {
         this.library = library; Songs = songs; this.load = load; this.play = play; this.log = log;
         playlistService = new(library.Root);
+        playlistService.Warning += message => Message(message);
         Queue = new(IsAvailable);
         Queue.Changed += RefreshQueue;
         Songs.CollectionChanged += (_, _) => { RefreshSongs(); Queue.RefreshAvailability(); };
@@ -93,6 +111,10 @@ public sealed class LibraryViewModel : ObservableObject
         MoveSongDownCommand = Command(() => EditAsync(() => MoveSongAsync(1)));
         LoadSelectedCommand = Command(LoadSelectedAsync);
         PlaySelectedCommand = Command(StartSelectedAsync);
+        PlayFromHereCommand = PlaySelectedCommand;
+        PlayAllPlaylistCommand = Command(() => PlayAllAsync(false));
+        ShufflePlayPlaylistCommand = Command(() => PlayAllAsync(true));
+        QueueAllPlaylistCommand = Command(QueueAllAsync);
         AddToQueueCommand = Command(() => { var song = RequireSong(); EnsureFile(song); Queue.Enqueue(song.Id); return Task.CompletedTask; });
         RemoveFromQueueCommand = Command(() => { if (SelectedQueueItem is { } item) Queue.Remove(item.EntryId); return Task.CompletedTask; });
         ClearQueueCommand = Command(() => { Queue.ClearUpcoming(); return Task.CompletedTask; });
@@ -153,9 +175,41 @@ public sealed class LibraryViewModel : ObservableObject
 
     private void SetSelectedContext(Song song)
     {
+        playbackCollectionName = CollectionTitle;
         if (SelectedPlaylist is { } playlist) Queue.StartPlaylist(playlist.SongIds, song.Id);
-        else Queue.StartSong(song.Id);
+        else Queue.StartPlaylist(OrderedCollection().Select(s => s.Id), song.Id);
     }
+    public async Task PlayAllAsync(bool shufflePlay = false)
+    {
+        await navigationGate.WaitAsync();
+        try
+        {
+            var songs = AvailableCollection();
+            if (songs.Count == 0) return;
+            playbackCollectionName = CollectionTitle; Queue.Shuffle = shufflePlay;
+            var first = Queue.StartPlaylist(songs.Select(s => s.Id), shufflePlay ? songs[Random.Shared.Next(songs.Count)].Id : null);
+            var song = songs.First(s => s.Id == first!.SongId);
+            SelectedSong = song; await play(song, false);
+        }
+        finally { navigationGate.Release(); }
+    }
+    private Task QueueAllAsync()
+    {
+        var songs = AvailableCollection();
+        foreach (var song in songs) Queue.Enqueue(song.Id);
+        if (songs.Count > 0) Message($"{songs.Count} músicas adicionadas à fila.");
+        return Task.CompletedTask;
+    }
+    private List<Song> AvailableCollection()
+    {
+        var songs = OrderedCollection().ToList();
+        var available = songs.Where(s => IsAvailable(s.Id)).ToList();
+        int missing = songs.Count - available.Count + (SelectedPlaylist?.SongIds.Count(id => Songs.All(s => s.Id != id)) ?? 0);
+        Message(available.Count == 0 ? "Esta coleção não possui músicas disponíveis. Importe músicas ou adicione-as à playlist."
+            : missing > 0 ? $"{missing} arquivos ausentes foram ignorados." : $"{available.Count} músicas disponíveis.");
+        return available;
+    }
+    private void Message(string message) { CollectionMessage = message; Raise(nameof(CollectionMessage)); log(message); }
     private Song RequireSong() => SelectedSong ?? throw new InvalidOperationException("Selecione uma música na biblioteca.");
     private Playlist RequirePlaylist() => SelectedPlaylist ?? throw new InvalidOperationException("Selecione uma playlist.");
     private string RequireName() => string.IsNullOrWhiteSpace(PlaylistName)
@@ -164,9 +218,17 @@ public sealed class LibraryViewModel : ObservableObject
     {
         var song = Songs.FirstOrDefault(s => s.Id == id);
         if (song == null) return false;
-        try { return File.Exists(library.GetSongPath(song)); }
+        try
+        {
+            bool exists = File.Exists(library.GetSongPath(song));
+            if (!exists && Queue.Current != null) MissingFileNotice(song);
+            return exists;
+        }
         catch (InvalidDataException) { return false; }
     }
+    private readonly HashSet<Guid> missingWarnings = [];
+    private void MissingFileNotice(Song song)
+    { if (missingWarnings.Add(song.Id)) log($"Arquivo ausente ignorado: {song.Title}."); }
     private void EnsureFile(Song song)
     {
         if (!File.Exists(library.GetSongPath(song)))
@@ -200,10 +262,10 @@ public sealed class LibraryViewModel : ObservableObject
     }
     private async Task AddToPlaylistAsync()
     {
-        var song = RequireSong();
         var playlist = TargetPlaylist ?? SelectedPlaylist ?? throw new InvalidOperationException("Escolha a playlist de destino.");
-        if (playlist.SongIds.Contains(song.Id)) return;
-        var updated = Copy(playlist); updated.SongIds.Add(song.Id);
+        var selection = SelectedSongs.Count > 0 ? SelectedSongs.ToArray() : new[] { RequireSong() };
+        var updated = Copy(playlist);
+        foreach (var song in selection) if (!updated.SongIds.Contains(song.Id)) updated.SongIds.Add(song.Id);
         await SaveReplacementAsync(playlist, updated);
     }
     private async Task RemoveFromPlaylistAsync()
@@ -241,12 +303,25 @@ public sealed class LibraryViewModel : ObservableObject
     {
         var oldSong = SelectedSong;
         VisibleSongs.Clear();
-        var byId = Songs.GroupBy(song => song.Id).ToDictionary(group => group.Key, group => group.First());
-        IEnumerable<Song> visible = SelectedPlaylist is { } playlist
-            ? playlist.SongIds.Where(byId.ContainsKey).Select(id => byId[id]) : Songs;
+        IEnumerable<Song> visible = OrderedCollection().Where(s =>
+            (KindFilter == "Todos" || s.Kind == KindFilter) &&
+            (string.IsNullOrWhiteSpace(SearchText) || s.Title.Contains(SearchText.Trim(), StringComparison.OrdinalIgnoreCase) ||
+                s.Artist.Contains(SearchText.Trim(), StringComparison.OrdinalIgnoreCase)));
         foreach (var song in visible) VisibleSongs.Add(song);
         if (oldSong != null && VisibleSongs.Contains(oldSong)) SelectedSong = oldSong;
         else SelectedSong = null;
+    }
+    private IEnumerable<Song> OrderedCollection()
+    {
+        var byId = Songs.GroupBy(song => song.Id).ToDictionary(group => group.Key, group => group.First());
+        IEnumerable<Song> songs = SelectedPlaylist is { } playlist
+            ? playlist.SongIds.Where(byId.ContainsKey).Select(id => byId[id]) : Songs;
+        return SortOrder switch
+        {
+            "Título" => songs.OrderBy(s => s.Title, StringComparer.CurrentCultureIgnoreCase),
+            "Artista" => songs.OrderBy(s => s.Artist, StringComparer.CurrentCultureIgnoreCase).ThenBy(s => s.Title),
+            "Duração" => songs.OrderBy(s => s.DurationMs), "Data de adição" => songs.OrderByDescending(s => s.AddedAt), _ => songs
+        };
     }
     private void RefreshQueue()
     {
@@ -255,10 +330,11 @@ public sealed class LibraryViewModel : ObservableObject
         foreach (var item in Queue.Upcoming)
         {
             var song = Songs.FirstOrDefault(s => s.Id == item.SongId);
-            if (song != null) Upcoming.Add(new(item.Id, song));
+            if (song != null) Upcoming.Add(new(item.Id, song, Upcoming.Count + 1));
         }
         SelectedQueueItem = Upcoming.FirstOrDefault(item => item.EntryId == selectedId);
         Raise(nameof(CurrentSong)); Raise(nameof(CurrentTitle)); Raise(nameof(HasContext));
         Raise(nameof(Shuffle)); Raise(nameof(RepeatMode)); Raise(nameof(RepeatLabel));
+        Raise(nameof(PlaybackCollectionName)); Raise(nameof(TrackLabel)); Raise(nameof(NextTitle));
     }
 }

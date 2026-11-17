@@ -14,7 +14,8 @@ public sealed class MidiService
     private static MusicSequence ToOriginal(MidiImportResult import) => new MidiOptimizationService()
         .Optimize(import, OptimizationSettings.ForPreset(OptimizationPreset.Original)).Sequence;
 
-    public MidiImportResult ReadDetailed(string path) => Analyze(MidiFile.Read(path), Path.GetFileNameWithoutExtension(path));
+    public MidiImportResult ReadDetailed(string path, string? displayTitle = null) =>
+        Analyze(MidiFile.Read(path), displayTitle ?? Path.GetFileNameWithoutExtension(path));
 
     public MidiImportResult Analyze(MidiFile file, string title)
     {
@@ -67,7 +68,7 @@ public sealed class MidiService
                 if (key is { } released && active.TryGetValue((entry.Track, released.Channel, released.Pitch), out var pending) && pending.Count > 0)
                 {
                     int index = pending.Dequeue();
-                    notes[index] = notes[index] with { DurationMs = Math.Max(0, Milliseconds(entry.Tick) - notes[index].TimeMs) };
+                    notes[index] = notes[index] with { DurationMs = Math.Max(0, Milliseconds(entry.Tick) - notes[index].TimeMs), HasNoteOff = true };
                 }
             }
         }

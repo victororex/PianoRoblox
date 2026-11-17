@@ -5,6 +5,7 @@ using System.Windows.Controls;
 using System.Windows.Input;
 using PianoRoblox.Services;
 using PianoRoblox.ViewModels;
+using PianoRoblox.Core.Models;
 
 namespace PianoRoblox.Views;
 
@@ -46,6 +47,17 @@ public partial class MainWindow : Window
     {
         if (e.OriginalSource is DependencyObject source && ItemsControl.ContainerFromElement((DataGrid)sender, source) is DataGridRow)
             ViewModel.Library.PlaySelectedCommand.Execute(null);
+    }
+    private void SongSelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        ViewModel.Library.SelectedSongs.Clear();
+        foreach (var song in ((DataGrid)sender).SelectedItems.OfType<Song>()) ViewModel.Library.SelectedSongs.Add(song);
+    }
+    private void SongRightClicked(object sender, MouseButtonEventArgs e)
+    {
+        var grid = (DataGrid)sender;
+        if (e.OriginalSource is DependencyObject source && ItemsControl.ContainerFromElement(grid, source) is DataGridRow row && !row.IsSelected)
+            grid.SelectedItem = row.Item;
     }
 }
 

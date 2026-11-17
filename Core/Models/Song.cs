@@ -19,6 +19,10 @@ public sealed class Song
     public int[]? SelectedTracks { get; set; }
     public PlaybackPerformanceMode PerformanceMode { get; set; } = PlaybackPerformanceMode.Normal;
     public string PianoProfileId { get; set; } = "legacy-61";
+    public NoteDurationSettings NoteDuration { get; set; } = new();
+    public RangePolicy RangePolicy { get; set; } = RangePolicy.Ignore;
+    public ShiftStrategy ShiftStrategy { get; set; } = ShiftStrategy.GroupSafe;
+    public ChordMode ChordMode { get; set; } = ChordMode.Auto;
     public DateTimeOffset AddedAt { get; set; } = DateTimeOffset.Now;
 }
 
